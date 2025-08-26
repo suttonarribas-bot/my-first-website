@@ -2,25 +2,104 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Spinning Square Demo</title>
+  <title>Customizable Spinning Shape</title>
   <style>
-    /* Style the square */
-    .square {
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      margin-top: 30px;
+    }
+
+    .shape {
       width: 100px;
       height: 100px;
       background-color: dodgerblue;
-      margin: 100px auto; /* center it */
-      animation: spin 2s linear infinite; /* apply animation */
+      margin: 50px auto;
+      animation: spin 2s linear infinite;
     }
 
-    /* Define the spin animation */
     @keyframes spin {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
     }
+
+    .controls {
+      margin-top: 20px;
+    }
+
+    .controls label {
+      margin-right: 10px;
+    }
   </style>
 </head>
 <body>
-  <div class="square"></div>
+  <h1>Customizable Spinning Shape</h1>
+  <div id="shape" class="shape"></div>
+
+  <div class="controls">
+    <label>
+      Size:
+      <input type="range" id="size" min="50" max="300" value="100">
+    </label>
+    <br><br>
+    <label>
+      Color:
+      <input type="color" id="color" value="#1e90ff">
+    </label>
+    <br><br>
+    <label>
+      Shape:
+      <select id="shapeSelect">
+        <option value="square">Square</option>
+        <option value="circle">Circle</option>
+        <option value="rectangle">Rectangle</option>
+      </select>
+    </label>
+    <br><br>
+    <label>
+      Position (Left/Right):
+      <input type="range" id="position" min="0" max="100" value="50">
+    </label>
+  </div>
+
+  <script>
+    const shape = document.getElementById("shape");
+    const sizeInput = document.getElementById("size");
+    const colorInput = document.getElementById("color");
+    const shapeSelect = document.getElementById("shapeSelect");
+    const positionInput = document.getElementById("position");
+
+    // Change size
+    sizeInput.addEventListener("input", () => {
+      let size = sizeInput.value + "px";
+      shape.style.width = size;
+      shape.style.height = size;
+    });
+
+    // Change color
+    colorInput.addEventListener("input", () => {
+      shape.style.backgroundColor = colorInput.value;
+    });
+
+    // Change shape
+    shapeSelect.addEventListener("change", () => {
+      if (shapeSelect.value === "circle") {
+        shape.style.borderRadius = "50%";
+      } else if (shapeSelect.value === "rectangle") {
+        shape.style.width = "150px";
+        shape.style.height = "80px";
+        shape.style.borderRadius = "0";
+      } else {
+        shape.style.borderRadius = "0";
+        shape.style.width = sizeInput.value + "px";
+        shape.style.height = sizeInput.value + "px";
+      }
+    });
+
+    // Change position
+    positionInput.addEventListener("input", () => {
+      shape.style.marginLeft = positionInput.value + "%";
+    });
+  </script>
 </body>
 </html>
