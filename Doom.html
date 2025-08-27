@@ -2,434 +2,362 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Retro FPS – Level 1</title>
 <style>
-  :root { --ui: rgba(255,255,255,.9); }
-  html, body { margin:0; height:100%; background:#111; color:#eee; font-family:system-ui, Arial, sans-serif; }
-  #wrap { display:flex; flex-direction:column; height:100%; }
-  header {
-    padding:6px 10px; font-size:14px; background:#000; color:#9fef00;
-    display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;
-    border-bottom:1px solid #222;
-  }
-  header .btn { background:#222; color:#9fef00; border:1px solid #333; padding:6px 10px; border-radius:6px; cursor:pointer; }
-  header .btn:active { transform:translateY(1px); }
-  #game {
-    flex:1; display:flex; align-items:center; justify-content:center; position:relative;
-    touch-action:none; /* keep gestures for virtual pad */
-  }
-  canvas { image-rendering: pixelated; background:#000; width:100%; height:100%; max-height:100vh; }
-  /* On-screen controls (mobile) */
-  #hud {
-    position:absolute; inset:0; pointer-events:none;
-    display:flex; justify-content:space-between; align-items:end; padding:12px;
-  }
-  .pad, .buttons { display:flex; gap:8px; pointer-events:auto; }
-  .pad { flex-wrap:wrap; width:160px; }
-  .pad .ctl, .buttons .ctl {
-    width:72px; height:56px; background:var(--ui); color:#000; border-radius:10px; border:0;
-    display:flex; align-items:center; justify-content:center; font-weight:700; opacity:.85;
-    user-select:none; -webkit-user-select:none;
-  }
-  .pad .wide { width:152px; }
-  .buttons { flex-direction:column; }
-  .status {
-    position:absolute; top:12px; left:50%; transform:translateX(-50%);
-    background:rgba(0,0,0,.6); padding:6px 10px; border-radius:6px; font-size:12px;
-  }
-  .toast {
-    position:absolute; bottom:50%; left:50%; transform:translate(-50%, 50%);
-    background:rgba(0,0,0,.7); padding:10px 14px; border-radius:8px; font-size:14px; text-align:center;
-  }
-  @media (min-width: 900px) {
-    /* Shrink on-screen controls on desktop; they’ll be hidden automatically if not needed */
-    #hud { display:none; }
-  }
+  html,body{margin:0;height:100%;background:#111;color:#eee;font-family:system-ui,Arial}
+  #wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px}
+  canvas{width:100vw;max-width:900px;height:60vh;touch-action:none;background:#000}
+  .hud{max-width:900px;width:100%;display:flex;justify-content:space-between;align-items:center;font-size:14px}
+  .btn{padding:.4rem .7rem;border:1px solid #666;background:#222;color:#eee;border-radius:6px}
+  /* Mobile touch zones */
+  .zones{position:fixed;inset:0;pointer-events:none}
+  .zone{position:absolute;top:0;height:100%;width:50%;pointer-events:auto}
+  .left{left:0}
+  .right{right:0}
+  .toast{position:fixed;top:8px;left:50%;transform:translateX(-50%);background:#222;padding:.4rem .7rem;border:1px solid #555;border-radius:6px;opacity:.9}
 </style>
 </head>
 <body>
 <div id="wrap">
-  <header>
-    <div>Retro FPS – Level 1 (reach the <strong>EXIT</strong>)</div>
-    <div style="display:flex; gap:8px; align-items:center">
-      <button class="btn" id="fullscreenBtn">Fullscreen</button>
-      <label style="display:flex; align-items:center; gap:6px">
-        Sensitivity
-        <input id="sens" type="range" min="0.4" max="2.0" value="1.0" step="0.1" />
-      </label>
-      <label style="display:flex; align-items:center; gap:6px">
-        FOV
-        <input id="fov" type="range" min="50" max="110" value="70" step="1" />
-      </label>
+  <canvas id="game" width="900" height="540"></canvas>
+  <div class="hud">
+    <div>
+      <strong>Controls</strong>:
+      WASD = move, ←/→ = look, Space = fire. On phone: left half = move, right half = look/tap to fire.
     </div>
-  </header>
-
-  <div id="game">
-    <canvas id="c" width="320" height="200" aria-label="Retro FPS canvas"></canvas>
-
-    <div class="status" id="status">WASD/Arrows to move • Mouse/touch to look</div>
-    <div id="hud">
-      <div class="pad">
-        <button class="ctl" data-act="moveForward">▲</button>
-        <div style="display:flex; gap:8px; width:152px; justify-content:space-between">
-          <button class="ctl" data-act="strafeLeft">◀</button>
-          <button class="ctl" data-act="strafeRight">▶</button>
-        </div>
-        <button class="ctl" data-act="moveBackward">▼</button>
-        <button class="ctl wide" data-act="interact">USE / EXIT</button>
-      </div>
-      <div class="buttons">
-        <button class="ctl" data-act="turnLeft">⟲</button>
-        <button class="ctl" data-act="turnRight">⟳</button>
-      </div>
-    </div>
-    <div class="toast" id="toast" style="display:none"></div>
+    <button id="fireBtn" class="btn">FIRE (Space)</button>
   </div>
 </div>
 
+<div class="zones" aria-hidden="true">
+  <div id="zoneLeft" class="zone left"></div>
+  <div id="zoneRight" class="zone right"></div>
+</div>
+<div id="toast" class="toast" style="display:none;"></div>
+
 <script>
-/* ====== Simple ray-caster (no external assets) ======
-   Keyboard: WASD / arrows to move, Q/E to strafe, Space to interact
-   Touch: on-screen controls
-   Goal: reach the EXIT tile (E)
-===================================================== */
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
 
-const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d', { alpha:false });
-ctx.imageSmoothingEnabled = false;
+  // ----- WORLD -----
+  // 0 empty, 1/2/3 walls (different colors), 9 = EXIT (green door)
+  const MAP_W = 16, MAP_H = 16;
+  const map = [
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,0,0,0,0,0,0,0,0,2,0,0,0,0,9,1,
+    1,0,2,2,0,0,0,0,0,2,0,0,3,0,0,1,
+    1,0,0,2,0,0,3,3,0,2,0,0,3,0,0,1,
+    1,0,0,2,0,0,0,3,0,2,0,0,0,0,0,1,
+    1,0,0,2,0,0,0,3,0,2,0,0,0,0,0,1,
+    1,0,0,2,0,0,0,0,0,2,0,0,0,0,0,1,
+    1,0,0,0,0,3,3,3,0,0,0,0,0,0,0,1,
+    1,0,0,0,0,0,0,0,0,0,0,2,2,2,0,1,
+    1,0,0,0,0,0,0,0,0,0,0,0,0,2,0,1,
+    1,0,0,0,0,0,0,3,3,3,0,0,0,2,0,1,
+    1,0,0,0,0,0,0,0,0,3,0,0,0,2,0,1,
+    1,0,0,0,0,0,0,0,0,3,0,0,0,2,0,1,
+    1,0,0,0,0,0,0,0,0,3,0,0,0,2,0,1,
+    1,0,0,0,0,0,0,0,0,0,0,0,0,2,0,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  ];
+  const WALL_COL = {1:'#a33',2:'#339',3:'#993',9:'#1a3'}; // exit drawn separately
 
-const state = {
-  w: canvas.width,
-  h: canvas.height,
-  fov: 70 * Math.PI/180,
-  turnSpeed: 2.0, // radians/sec (scaled by sensitivity)
-  moveSpeed: 2.5, // units/sec
-  keys: {},
-  mobileHeld: {},
-  last: 0,
-  won: false
-};
+  // Simple enemies (billboards)
+  const enemies = [
+    {x: 6.5, y: 3.5, alive: true},
+    {x: 11.5,y: 10.5, alive: true}
+  ];
 
-const COLORS = {
-  floor: '#202020',
-  ceil:  '#080808',
-  wallA: '#6c9cff',  // facing NESW different shading
-  wallB: '#5a86dc',
-  wallC: '#496fb8',
-  wallD: '#3a5c98',
-  exitA: '#ffe66c',
-  exitB: '#e2c955',
-  exitC: '#c9b047',
-  exitD: '#a79239'
-};
+  // Player
+  const player = {
+    x: 2.5, y: 2.5, a: 0, // angle radians
+    fov: Math.PI/3, speed: 3.0, rot: 2.4, // units/sec, rad/sec
+  };
 
-// Level map (1=wall, 0=space, E=exit)
-const MAP = [
-  "1111111111111111",
-  "1E00000000100001",
-  "1011110111011101",
-  "1000010000010001",
-  "1011010111110101",
-  "1001000100000101",
-  "1111011101110101",
-  "1001000001000101",
-  "1011011101011101",
-  "1000010000000001",
-  "1011110111111101",
-  "1000000000000001",
-  "1111111111111111"
-];
-const MH = MAP.length, MW = MAP[0].length;
+  // Timing
+  let last = performance.now();
 
-// Player start
-const player = {
-  x: 2.5, y: 1.5, dir: 0.0 // radians; 0 faces +X (east)
-};
+  // Input (keyboard)
+  const keys = {};
+  addEventListener('keydown', e => { keys[e.code]=true; if(e.code==='Space') shoot(); });
+  addEventListener('keyup',   e => { keys[e.code]=false; });
 
-function cell(x, y) {
-  if (x<0||y<0||x>=MW||y>=MH) return '1';
-  return MAP[y|0][x|0];
-}
+  // Z-buffer for sprites
+  let zbuf = new Float32Array(canvas.width);
 
-// Resize to fill while preserving aspect
-function fit() {
-  const parent = canvas.parentElement.getBoundingClientRect();
-  const target = Math.min(parent.width, parent.height * (canvas.width/ canvas.height));
-  canvas.style.width = '100%';
-  canvas.style.height = '100%';
-}
-window.addEventListener('resize', fit);
-fit();
-
-// Input: keyboard
-const kd = e => (state.keys[e.code] = true);
-const ku = e => (state.keys[e.code] = false);
-window.addEventListener('keydown', kd);
-window.addEventListener('keyup', ku);
-
-// Input: mouse/touch look
-let pointerLocked = false;
-function lockPointer() {
-  if (!/Mobi|Android/i.test(navigator.userAgent)) {
-    canvas.requestPointerLock?.();
+  // Pointer / touch controls
+  const left = document.getElementById('zoneLeft');
+  const right = document.getElementById('zoneRight');
+  let moveTouch = null, lookTouch = null;
+  let moveVec = {x:0,y:0}, lookDelta = 0;
+  function norm(v){ const m=Math.hypot(v.x,v.y)||1; return {x:v.x/m,y:v.y/m}; }
+  function bindZone(el, cbStart, cbMove, cbEnd){
+    el.addEventListener('pointerdown', e => { el.setPointerCapture(e.pointerId); cbStart(e); });
+    el.addEventListener('pointermove', cbMove);
+    el.addEventListener('pointerup', cbEnd);
+    el.addEventListener('pointercancel', cbEnd);
   }
-}
-document.addEventListener('pointerlockchange', () => {
-  pointerLocked = (document.pointerLockElement === canvas);
-});
-canvas.addEventListener('click', lockPointer);
-canvas.addEventListener('mousemove', (e) => {
-  if (!pointerLocked) return;
-  const sens = parseFloat(document.getElementById('sens').value);
-  player.dir += (e.movementX || 0) * 0.002 * sens;
-});
+  bindZone(left,
+    e => { if(moveTouch) return; moveTouch=e.pointerId; moveVec={x:0,y:0}; },
+    e => { if(e.pointerId!==moveTouch) return; const r=left.getBoundingClientRect();
+           const cx=r.left+r.width/2, cy=r.top+r.height/2;
+           moveVec={x:(e.clientX-cx)/r.width*2, y:(e.clientY-cy)/r.height*2}; },
+    e => { if(e.pointerId===moveTouch){ moveTouch=null; moveVec={x:0,y:0}; } }
+  );
+  bindZone(right,
+    e => { if(lookTouch) return; lookTouch=e.pointerId; lookDelta=0; right._lastX=e.clientX; right._tapT=performance.now(); },
+    e => { if(e.pointerId!==lookTouch) return;
+           const dx=e.clientX-right._lastX; right._lastX=e.clientX; lookDelta+=dx; },
+    e => { if(e.pointerId===lookTouch){
+             // quick tap to fire
+             if(performance.now()-right._tapT < 200) shoot();
+             lookTouch=null; lookDelta=0;
+           } }
+  );
 
-// Touch drag to look
-let lastTouchX = null;
-canvas.addEventListener('touchstart', (e) => {
-  lastTouchX = e.touches[0].clientX;
-}, {passive:true});
-canvas.addEventListener('touchmove', (e) => {
-  if (lastTouchX == null) return;
-  const x = e.touches[0].clientX;
-  const dx = x - lastTouchX;
-  lastTouchX = x;
-  const sens = parseFloat(document.getElementById('sens').value);
-  player.dir += dx * 0.004 * sens;
-}, {passive:true});
-canvas.addEventListener('touchend', () => { lastTouchX = null; }, {passive:true});
+  // Button fire
+  document.getElementById('fireBtn').onclick = () => shoot();
 
-// On-screen buttons
-for (const b of document.querySelectorAll('[data-act]')) {
-  const act = b.getAttribute('data-act');
-  const set = v => (state.mobileHeld[act] = v);
-  b.addEventListener('touchstart', e => { e.preventDefault(); set(true); }, {passive:false});
-  b.addEventListener('touchend',   e => { e.preventDefault(); set(false); }, {passive:false});
-  b.addEventListener('mousedown',  e => { e.preventDefault(); set(true); });
-  b.addEventListener('mouseup',    e => { e.preventDefault(); set(false); });
-  b.addEventListener('mouseleave', e => { set(false); });
-}
-
-// Fullscreen
-document.getElementById('fullscreenBtn').addEventListener('click', () => {
-  const el = document.documentElement;
-  if (!document.fullscreenElement) el.requestFullscreen?.();
-  else document.exitFullscreen?.();
-});
-
-// FOV change
-document.getElementById('fov').addEventListener('input', e => {
-  state.fov = (+e.target.value) * Math.PI/180;
-});
-
-// Movement helpers
-function tryMove(nx, ny) {
-  // simple collision with small radius
-  const r = 0.18;
-  if (cell(nx - r, ny) !== '1' && cell(nx + r, ny) !== '1' && cell(nx, ny - r) !== '1' && cell(nx, ny + r) !== '1') {
-    player.x = nx; player.y = ny;
+  // Utility
+  function tile(x,y){ if(x<0||y<0||x>=MAP_W||y>=MAP_H) return 1; return map[(y|0)*MAP_W+(x|0)]; }
+  function showToast(msg, ms=1400){
+    const t=document.getElementById('toast');
+    t.textContent=msg; t.style.display='block';
+    clearTimeout(t._to); t._to=setTimeout(()=>t.style.display='none', ms);
   }
-}
 
-// Interact (open exit if close)
-function interact() {
-  // If near exit tile center, win
-  for (let oy = -1; oy <= 1; oy++) {
-    for (let ox = -1; ox <= 1; ox++) {
-      const cx = Math.floor(player.x + ox);
-      const cy = Math.floor(player.y + oy);
-      if (cell(cx, cy) === 'E') {
-        const dx = (cx + .5) - player.x;
-        const dy = (cy + .5) - player.y;
-        const d = Math.hypot(dx, dy);
-        if (d < 0.8) {
-          win();
-          return;
+  // Raycast a single ray using DDA
+  function castRay(ax, ay, ang, max=20){
+    const sin=Math.sin(ang), cos=Math.cos(ang);
+    let dist = 0, hit=false, side=0, hitTile=0;
+    // DDA setup
+    let mapX = Math.floor(ax), mapY = Math.floor(ay);
+    const deltaDistX = Math.abs(1 / (cos||1e-6));
+    const deltaDistY = Math.abs(1 / (sin||1e-6));
+    let stepX = (cos<0)?-1:1, stepY=(sin<0)?-1:1;
+    let sideDistX = (cos<0)? (ax-mapX)*deltaDistX : (mapX+1-ax)*deltaDistX;
+    let sideDistY = (sin<0)? (ay-mapY)*deltaDistY : (mapY+1-ay)*deltaDistY;
+
+    while(!hit && dist<max){
+      if(sideDistX < sideDistY){ sideDistX+=deltaDistX; mapX+=stepX; side=0; }
+      else { sideDistY+=deltaDistY; mapY+=stepY; side=1; }
+      hitTile = tile(mapX, mapY);
+      if(hitTile!==0){
+        hit=true;
+        dist = (side===0)? (sideDistX-deltaDistX) : (sideDistY-deltaDistY);
+      }
+    }
+    return {dist: dist||max, side, tile:hitTile, mx:mapX, my:mapY};
+  }
+
+  // Shooting (hitscan toward crosshair)
+  function shoot(){
+    // Simple muzzle flash feedback
+    flashTimer = 0.08;
+    // Check visible enemy roughly under crosshair
+    let hit = false;
+    let closest = {d: 1e9, idx: -1};
+    for(let i=0;i<enemies.length;i++){
+      const e = enemies[i]; if(!e.alive) continue;
+      const dx=e.x-player.x, dy=e.y-player.y;
+      const dist=Math.hypot(dx,dy);
+      const angTo=Math.atan2(dy,dx);
+      let da=((angTo-player.a+Math.PI*3)%(Math.PI*2))-Math.PI; // normalize
+      if(Math.abs(da) < player.fov*0.06 && dist<8){ // near center
+        // walls block?
+        const ray = castRay(player.x, player.y, player.a, 20);
+        if(ray.dist+0.05 >= dist){ // enemy not behind wall
+          if(dist < closest.d){ closest={d:dist, idx:i}; }
         }
       }
     }
-  }
-  flash("Find the glowing EXIT and stand near it, then press USE.");
-}
-
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'Space') interact();
-});
-
-// On-screen USE
-document.querySelector('[data-act="interact"]').addEventListener('click', interact);
-
-// Ray casting using DDA
-function castRay(rayDirX, rayDirY) {
-  const mapX = Math.floor(player.x);
-  const mapY = Math.floor(player.y);
-
-  let sideDistX, sideDistY;
-
-  const deltaDistX = Math.abs(1 / (rayDirX || 1e-9));
-  const deltaDistY = Math.abs(1 / (rayDirY || 1e-9));
-  let stepX, stepY;
-
-  if (rayDirX < 0) { stepX = -1; sideDistX = (player.x - mapX) * deltaDistX; }
-  else { stepX = 1; sideDistX = (mapX + 1.0 - player.x) * deltaDistX; }
-
-  if (rayDirY < 0) { stepY = -1; sideDistY = (player.y - mapY) * deltaDistY; }
-  else { stepY = 1; sideDistY = (mapY + 1.0 - player.y) * deltaDistY; }
-
-  let hit = false, side = 0, tile = '0';
-  let cx = mapX, cy = mapY;
-
-  for (let i = 0; i < 64; i++) {
-    if (sideDistX < sideDistY) { sideDistX += deltaDistX; cx += stepX; side = 0; }
-    else { sideDistY += deltaDistY; cy += stepY; side = 1; }
-
-    tile = cell(cx, cy);
-    if (tile !== '0') { hit = true; break; }
-  }
-
-  let perpWallDist;
-  if (!hit) perpWallDist = 32; // far
-  else {
-    if (side === 0) perpWallDist = (cx - player.x + (1 - stepX)/2) / (rayDirX || 1e-9);
-    else            perpWallDist = (cy - player.y + (1 - stepY)/2) / (rayDirY || 1e-9);
-  }
-
-  return { dist: perpWallDist, side, tile };
-}
-
-function shadeFor(tile, side) {
-  const s = side===0 ? 0 : 1; // darker on Y sides
-  if (tile === 'E') return [COLORS.exitA, COLORS.exitB, COLORS.exitC, COLORS.exitD][s*2];
-  return [COLORS.wallA, COLORS.wallB, COLORS.wallC, COLORS.wallD][s*2];
-}
-
-// Simple sky/floor fill per column
-function render() {
-  const { w, h, fov } = state;
-  ctx.fillStyle = COLORS.ceil;  ctx.fillRect(0, 0, w, h/2);
-  ctx.fillStyle = COLORS.floor; ctx.fillRect(0, h/2, w, h/2);
-
-  const planeHalf = Math.tan(fov/2);
-
-  for (let x = 0; x < w; x++) {
-    const camX = (2*x / w - 1) * planeHalf;
-    const rayDirX = Math.cos(player.dir) - Math.sin(player.dir) * (-camX);
-    const rayDirY = Math.sin(player.dir) + Math.cos(player.dir) * (-camX);
-
-    const hit = castRay(rayDirX, rayDirY);
-    const dist = Math.max(0.0001, hit.dist);
-    const lineH = Math.min(h, (h / dist));
-
-    const drawStart = (h >> 1) - (lineH >> 1);
-    const color = shadeFor(hit.tile, hit.side);
-    ctx.fillStyle = color;
-    ctx.fillRect(x, drawStart, 1, lineH);
-
-    // Exit shimmer overlay
-    if (hit.tile === 'E') {
-      const t = (performance.now() * 0.004) % 1;
-      const alpha = 0.25 + 0.25 * Math.sin(t*6.28);
-      ctx.fillStyle = `rgba(255, 230, 108, ${alpha.toFixed(3)})`;
-      ctx.fillRect(x, drawStart, 1, lineH);
+    if(closest.idx>=0){
+      enemies[closest.idx].alive=false;
+      showToast('Enemy down!');
+      hit = true;
     }
+    if(!hit) showToast('Miss');
   }
 
-  // Mini-map
-  drawMiniMap();
-}
-
-function drawMiniMap() {
-  const scale = 4;
-  const pad = 6;
-  ctx.globalAlpha = 0.9;
-  ctx.fillStyle = 'rgba(0,0,0,.5)';
-  ctx.fillRect(pad-2, pad-2, MW*scale+4, MH*scale+4);
-  for (let y=0;y<MH;y++) for (let x=0;x<MW;x++) {
-    const t = cell(x,y);
-    ctx.fillStyle = t==='1' ? '#888' : (t==='E' ? '#ffd84d' : '#222');
-    ctx.fillRect(pad + x*scale, pad + y*scale, scale, scale);
+  // Resize for crisp rendering
+  function fitCanvas(){
+    const dpr = Math.min(2, (window.devicePixelRatio||1));
+    const cssW = Math.min(window.innerWidth, 900);
+    const cssH = Math.floor(cssW*0.6);
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+    canvas.width = Math.floor(cssW*dpr);
+    canvas.height = Math.floor(cssH*dpr);
   }
-  // Player
-  ctx.fillStyle = '#9fef00';
-  ctx.fillRect(pad + player.x*scale -1, pad + player.y*scale -1, 2,2);
-  ctx.globalAlpha = 1;
-}
+  fitCanvas();
+  addEventListener('resize', fitCanvas);
 
-// Simple movement + collision
-function update(dt) {
-  const sens = parseFloat(document.getElementById('sens').value);
-  const turn = state.turnSpeed * sens;
+  let flashTimer = 0;
 
-  let turnDir = 0, fwd = 0, strafe = 0;
+  // ----- MAIN LOOP -----
+  function loop(ts){
+    const dt = Math.min(0.033, (ts-last)/1000); last = ts;
 
-  // Keyboard
-  if (state.keys['ArrowLeft'] || state.keys['KeyJ']) turnDir -= 1;
-  if (state.keys['ArrowRight'] || state.keys['KeyL']) turnDir += 1;
-  if (state.keys['ArrowUp'] || state.keys['KeyW']) fwd += 1;
-  if (state.keys['ArrowDown'] || state.keys['KeyS']) fwd -= 1;
-  if (state.keys['KeyA'] || state.keys['KeyQ']) strafe -= 1;
-  if (state.keys['KeyD'] || state.keys['KeyE']) strafe += 1;
+    // Movement (keyboard)
+    const forward = (keys['KeyW']?1:0) - (keys['KeyS']?1:0);
+    const strafe  = (keys['KeyD']?1:0) - (keys['KeyA']?1:0);
+    const turn    = (keys['ArrowRight']?1:0) - (keys['ArrowLeft']?1:0);
 
-  // On-screen
-  if (state.mobileHeld.turnLeft) turnDir -= 1;
-  if (state.mobileHeld.turnRight) turnDir += 1;
-  if (state.mobileHeld.moveForward) fwd += 1;
-  if (state.mobileHeld.moveBackward) fwd -= 1;
-  if (state.mobileHeld.strafeLeft) strafe -= 1;
-  if (state.mobileHeld.strafeRight) strafe += 1;
+    // Movement (touch)
+    const mv = norm(moveVec);
+    const look = lookDelta; lookDelta = 0;
 
-  player.dir += turnDir * turn * dt;
+    // Rotate
+    player.a += (turn*player.rot*dt) + (look * 0.004);
 
-  const cos = Math.cos(player.dir), sin = Math.sin(player.dir);
-  const ms = state.moveSpeed;
+    // Move
+    const sp = player.speed*dt;
+    const dirx = Math.cos(player.a), diry = Math.sin(player.a);
+    const strx = Math.cos(player.a+Math.PI/2), stry = Math.sin(player.a+Math.PI/2);
+    let vx = dirx*(forward*sp) + strx*(strafe*sp) + (mv.x*sp*1.2);
+    let vy = diry*(forward*sp) + stry*(strafe*sp) + (mv.y*sp*1.2);
 
-  const dx = (cos * fwd + (-sin) * strafe) * ms * dt;
-  const dy = (sin * fwd + ( cos) * strafe) * ms * dt;
+    // simple collision
+    const nx = player.x + vx, ny = player.y + vy;
+    if(tile(nx, player.y)===0) player.x = nx;
+    if(tile(player.x, ny)===0) player.y = ny;
 
-  tryMove(player.x + dx, player.y + dy);
-
-  // Auto-win if we step into the exit tile center
-  if (!state.won) {
-    const cx = Math.floor(player.x), cy = Math.floor(player.y);
-    if (cell(cx, cy) === 'E') {
-      const d = Math.hypot((cx+0.5)-player.x, (cy+0.5)-player.y);
-      if (d < 0.6) win();
+    // Check exit
+    const tx = Math.floor(player.x), ty = Math.floor(player.y);
+    if(tile(tx,ty)===9 && Math.hypot(player.x-(tx+0.5), player.y-(ty+0.5))<0.7){
+      winScreen(); return;
     }
+
+    // Render
+    render(dt);
+    requestAnimationFrame(loop);
   }
-}
 
-function loop(ts) {
-  if (!state.last) state.last = ts;
-  const dt = Math.min(0.05, (ts - state.last) / 1000);
-  state.last = ts;
+  function render(dt){
+    const W = canvas.width, H = canvas.height;
+    // Sky & floor
+    const sky = ctx.createLinearGradient(0,0,0,H/2);
+    sky.addColorStop(0,'#334'); sky.addColorStop(1,'#112');
+    ctx.fillStyle = sky; ctx.fillRect(0,0,W,H/2);
+    const floor = ctx.createLinearGradient(0,H/2,0,H);
+    floor.addColorStop(0,'#222'); floor.addColorStop(1,'#000');
+    ctx.fillStyle = floor; ctx.fillRect(0,H/2,W,H/2);
 
-  update(dt);
-  render();
+    // Walls via ray casting (one vertical slice per column)
+    const cols = W|0;
+    zbuf = zbuf.length===cols ? zbuf : new Float32Array(cols);
+    for(let x=0;x<cols;x++){
+      const cameraX = (2*x/cols - 1); // -1..1
+      const rayAng = player.a + cameraX * player.fov/2 * 2;
+      const hit = castRay(player.x, player.y, rayAng, 20);
+      const dist = hit.dist * Math.cos(rayAng - player.a); // fix fisheye
+      zbuf[x] = dist;
+
+      const lineH = Math.min(H, (H / (dist+0.0001)));
+      const y0 = (H - lineH)/2;
+
+      // Color
+      let col = WALL_COL[hit.tile] || '#777';
+      // darken if side
+      if(hit.side) col = shade(col, 0.7);
+      // highlight exit
+      if(hit.tile===9) col = '#2f5';
+
+      ctx.fillStyle = col;
+      ctx.fillRect(x, y0, 1, lineH);
+    }
+
+    // Sprites (enemies)
+    const visible = [];
+    for(const e of enemies){
+      if(!e.alive) continue;
+      const dx=e.x-player.x, dy=e.y-player.y;
+      const dist=Math.hypot(dx,dy);
+      const ang=Math.atan2(dy,dx)-player.a;
+      let a=((ang+Math.PI*3)%(Math.PI*2))-Math.PI;
+      if(Math.abs(a) < player.fov*0.6 && dist>0.2){
+        visible.push({e,dist,a});
+      }
+    }
+    visible.sort((a,b)=>b.dist-a.dist);
+    for(const v of visible){
+      const size = Math.min(H, H/(v.dist));
+      const sx = ( (v.a/(player.fov))* (canvas.width/2) ) + canvas.width/2;
+      const half = size/2;
+      const x0 = (sx-half)|0, x1=(sx+half)|0;
+      // clip by zbuffer
+      ctx.fillStyle = '#f44';
+      for(let x=Math.max(0,x0); x<Math.min(canvas.width,x1); x++){
+        if(v.dist < zbuf[x]-0.01){
+          ctx.fillRect(x, (H/2 - size*0.9), 1, size*0.9*2);
+        }
+      }
+    }
+
+    // Crosshair
+    ctx.strokeStyle = '#ddd';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(W/2-8,H/2); ctx.lineTo(W/2+8,H/2);
+    ctx.moveTo(W/2,H/2-8); ctx.lineTo(W/2,H/2+8);
+    ctx.stroke();
+
+    // Muzzle flash
+    if(flashTimer>0){
+      ctx.fillStyle='rgba(255,255,200,0.18)';
+      ctx.fillRect(0,0,W,H);
+      flashTimer -= dt;
+    }
+
+    // Mini-map (top-left)
+    const cell = 6, off=10;
+    ctx.fillStyle='#0008';
+    ctx.fillRect(off-2,off-2,MAP_W*cell+4,MAP_H*cell+4);
+    for(let y=0;y<MAP_H;y++){
+      for(let x=0;x<MAP_W;x++){
+        const t = map[y*MAP_W+x];
+        ctx.fillStyle = t? '#666' : '#111';
+        if(t===9) ctx.fillStyle='#2f5';
+        ctx.fillRect(off+x*cell, off+y*cell, cell-1, cell-1);
+      }
+    }
+    // enemies on map
+    for(const e of enemies){
+      ctx.fillStyle = e.alive ? '#f44' : '#555';
+      ctx.fillRect(off+e.x*cell-1, off+e.y*cell-1, 3,3);
+    }
+    // player arrow
+    ctx.fillStyle='#4cf';
+    ctx.beginPath();
+    const px = off+player.x*cell, py=off+player.y*cell;
+    ctx.arc(px,py,2,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#4cf'; ctx.beginPath();
+    ctx.moveTo(px,py);
+    ctx.lineTo(px+Math.cos(player.a)*8, py+Math.sin(player.a)*8);
+    ctx.stroke();
+  }
+
+  function shade(hex, f){
+    const c = parseInt(hex.slice(1),16);
+    let r=((c>>16)&255)*f|0, g=((c>>8)&255)*f|0, b=(c&255)*f|0;
+    return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1);
+  }
+
+  function winScreen(){
+    const W=canvas.width,H=canvas.height;
+    ctx.fillStyle='#020'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#2f5'; ctx.textAlign='center';
+    ctx.font = Math.floor(H*0.08)+'px system-ui,Arial';
+    ctx.fillText('LEVEL COMPLETE', W/2, H/2);
+    ctx.font = Math.floor(H*0.035)+'px system-ui,Arial';
+    ctx.fillText('You reached the exit!', W/2, H/2+50);
+  }
+
+  showToast('Find the green exit. Tap/Space to shoot.');
   requestAnimationFrame(loop);
-}
-
-function win() {
-  state.won = true;
-  flash("Level Complete! Refresh to replay.");
-}
-
-function flash(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.style.display = 'block';
-  clearTimeout(flash._id);
-  flash._id = setTimeout(() => t.style.display = 'none', 2200);
-}
-
-// Helpful hint on load for mobile users
-if (/Mobi|Android/i.test(navigator.userAgent)) {
-  flash("Use the on-screen controls. Drag to look.");
-} else {
-  flash("Click canvas to lock mouse. WASD to move, Space to USE.");
-}
-
-requestAnimationFrame(loop);
+})();
 </script>
 </body>
 </html>
