@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Retro FPS – Level 1</title>
+<style>
+  :root { --ui: rgba(255,255,255,.9); }
+  html, body { margin:0; height:100%; background:#111; color:#eee; font-family:system-ui, Arial, sans-serif; }
+  #wrap { display:flex; flex-direction:column; height:100%; }
+  header {
+    padding:6px 10px; font-size:14px; background:#000; color:#9fef00;
+    display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;
+    border-bottom:1px solid #222;
+  }
+  header .btn { background:#222; color:#9fef00; border:1px solid #333; padding:6px 10px; border-radius:6px; cursor:pointer; }
+  header .btn:active { transform:translateY(1px); }
+  #game {
+    flex:1; display:flex; align-items:center; justify-content:center; position:relative;
+    touch-action:none; /* keep gestures for virtual pad */
+  }
+  canvas { image-rendering: pixelated; background:#000; width:100%; height:100%; max-height:100vh; }
+  /* On-screen controls (mobile) */
+  #hud {
+    position:absolute; inset:0; pointer-events:none;
+    display:flex; justify-content:space-between; align-items:end; padding:12px;
+  }
+  .pad, .buttons { display:flex; gap:8px; pointer-events:auto; }
+  .pad { flex-wrap:wrap; width:160px; }
+  .pad .ctl, .buttons .ctl {
+    width:72px; height:56px; background:var(--ui); color:#000; border-radius:10px; border:0;
+    display:flex; align-items:center; justify-content:center; font-weight:700; opacity:.85;
+    user-select:none; -webkit-user-select:none;
+  }
+  .pad .wide { width:152px; }
+  .buttons { flex-direction:column; }
+  .status {
+    position:absolute; top:12px; left:50%; transform:translateX(-50%);
+    background:rgba(0,0,0,.6); padding:6px 10px; border-radius:6px; font-size:12px;
+  }
+  .toast {
+    position:absolute; bottom:50%; left:50%; transform:translate(-50%, 50%);
+    background:rgba(0,0,0,.7); padding:10px 14px; border-radius:8px; font-size:14px; text-align:center;
+  }
+  @media (min-width: 900px) {
+    /* Shrink on-screen controls on desktop; they’ll be hidden automatically if not needed */
+    #hud { display:none; }
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <header>
+    <div>Retro FPS – Level 1 (reach the <strong>EXIT</strong>)</div>
+    <div style="display:flex; gap:8px; align-items:center">
+      <button class="btn" id="fullscreenBtn">Fullscreen</button>
+      <label style="display:flex; align-items:center; gap:6px">
+        Sensitivity
+        <input id="sens" type="range" min="0.4" max="2.0" value="1.0" step="0.1" />
+      </label>
+      <label style="display:flex; align-items:center; gap:6px">
+        FOV
+        <input id="fov" type="range" min="50" max="110" value="70" step="1" />
+      </label>
+    </div>
+  </header>
+
+  <div id="game">
+    <canvas id="c" width="320" height="200" aria-label="Retro FPS canvas"></canvas>
+
+    <div class="status" id="status">WASD/Arrows to move • Mouse/touch to look</div>
+    <div id="hud">
+      <div class="pad">
+        <button class="ctl" data-act="moveForward">▲</button>
+        <div style="display:flex; gap:8px; width:152px; justify-content:space-between">
+          <button class="ctl" data-act="strafeLeft">◀</button>
+          <button class="ctl" data-act="strafeRight">▶</button>
+        </div>
+        <button class="ctl" data-act="moveBackward">▼</button>
+        <button class="ctl wide" data-act="interact">USE / EXIT</button>
+      </div>
+      <div class="buttons">
+        <button class="ctl" data-act="turnLeft">⟲</button>
+        <button class="ctl" data-act="turnRight">⟳</button>
+      </div>
+    </div>
+    <div class="toast" id="toast" style="display:none"></div>
+  </div>
+</div>
+
+<script>
+/* ====== Simple ray-caster (no external assets) ======
+   Keyboard: WASD / arrows to move, Q/E to strafe, Space to interact
+   Touch: on-screen controls
+   Goal: reach the EXIT tile (E)
+===================================================== */
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha:false });
+ctx.imageSmoothingEnabled = false;
+
+const state = {
+  w: canvas.width,
+  h: canvas.height,
+  fov: 70 * Math.PI/180,
+  turnSpeed: 2.0, // radians/sec (scaled by sensitivity)
+  moveSpeed: 2.5, // units/sec
+  keys: {},
+  mobileHeld: {},
+  last: 0,
+  won: false
+};
+
+const COLORS = {
+  floor: '#202020',
+  ceil:  '#080808',
+  wallA: '#6c9cff',  // facing NESW different shading
+  wallB: '#5a86dc',
+  wallC: '#496fb8',
+  wallD: '#3a5c98',
+  exitA: '#ffe66c',
+  exitB: '#e2c955',
+  exitC: '#c9b047',
+  exitD: '#a79239'
+};
+
+// Level map (1=wall, 0=space, E=exit)
+const MAP = [
+  "1111111111111111",
+  "1E00000000100001",
+  "1011110111011101",
+  "1000010000010001",
+  "1011010111110101",
+  "1001000100000101",
+  "1111011101110101",
+  "1001000001000101",
+  "1011011101011101",
+  "1000010000000001",
+  "1011110111111101",
+  "1000000000000001",
+  "1111111111111111"
+];
+const MH = MAP.length, MW = MAP[0].length;
+
+// Player start
+const player = {
+  x: 2.5, y: 1.5, dir: 0.0 // radians; 0 faces +X (east)
+};
+
+function cell(x, y) {
+  if (x<0||y<0||x>=MW||y>=MH) return '1';
+  return MAP[y|0][x|0];
+}
+
+// Resize to fill while preserving aspect
+function fit() {
+  const parent = canvas.parentElement.getBoundingClientRect();
+  const target = Math.min(parent.width, parent.height * (canvas.width/ canvas.height));
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+}
+window.addEventListener('resize', fit);
+fit();
+
+// Input: keyboard
+const kd = e => (state.keys[e.code] = true);
+const ku = e => (state.keys[e.code] = false);
+window.addEventListener('keydown', kd);
+window.addEventListener('keyup', ku);
+
+// Input: mouse/touch look
+let pointerLocked = false;
+function lockPointer() {
+  if (!/Mobi|Android/i.test(navigator.userAgent)) {
+    canvas.requestPointerLock?.();
+  }
+}
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = (document.pointerLockElement === canvas);
+});
+canvas.addEventListener('click', lockPointer);
+canvas.addEventListener('mousemove', (e) => {
+  if (!pointerLocked) return;
+  const sens = parseFloat(document.getElementById('sens').value);
+  player.dir += (e.movementX || 0) * 0.002 * sens;
+});
+
+// Touch drag to look
+let lastTouchX = null;
+canvas.addEventListener('touchstart', (e) => {
+  lastTouchX = e.touches[0].clientX;
+}, {passive:true});
+canvas.addEventListener('touchmove', (e) => {
+  if (lastTouchX == null) return;
+  const x = e.touches[0].clientX;
+  const dx = x - lastTouchX;
+  lastTouchX = x;
+  const sens = parseFloat(document.getElementById('sens').value);
+  player.dir += dx * 0.004 * sens;
+}, {passive:true});
+canvas.addEventListener('touchend', () => { lastTouchX = null; }, {passive:true});
+
+// On-screen buttons
+for (const b of document.querySelectorAll('[data-act]')) {
+  const act = b.getAttribute('data-act');
+  const set = v => (state.mobileHeld[act] = v);
+  b.addEventListener('touchstart', e => { e.preventDefault(); set(true); }, {passive:false});
+  b.addEventListener('touchend',   e => { e.preventDefault(); set(false); }, {passive:false});
+  b.addEventListener('mousedown',  e => { e.preventDefault(); set(true); });
+  b.addEventListener('mouseup',    e => { e.preventDefault(); set(false); });
+  b.addEventListener('mouseleave', e => { set(false); });
+}
+
+// Fullscreen
+document.getElementById('fullscreenBtn').addEventListener('click', () => {
+  const el = document.documentElement;
+  if (!document.fullscreenElement) el.requestFullscreen?.();
+  else document.exitFullscreen?.();
+});
+
+// FOV change
+document.getElementById('fov').addEventListener('input', e => {
+  state.fov = (+e.target.value) * Math.PI/180;
+});
+
+// Movement helpers
+function tryMove(nx, ny) {
+  // simple collision with small radius
+  const r = 0.18;
+  if (cell(nx - r, ny) !== '1' && cell(nx + r, ny) !== '1' && cell(nx, ny - r) !== '1' && cell(nx, ny + r) !== '1') {
+    player.x = nx; player.y = ny;
+  }
+}
+
+// Interact (open exit if close)
+function interact() {
+  // If near exit tile center, win
+  for (let oy = -1; oy <= 1; oy++) {
+    for (let ox = -1; ox <= 1; ox++) {
+      const cx = Math.floor(player.x + ox);
+      const cy = Math.floor(player.y + oy);
+      if (cell(cx, cy) === 'E') {
+        const dx = (cx + .5) - player.x;
+        const dy = (cy + .5) - player.y;
+        const d = Math.hypot(dx, dy);
+        if (d < 0.8) {
+          win();
+          return;
+        }
+      }
+    }
+  }
+  flash("Find the glowing EXIT and stand near it, then press USE.");
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') interact();
+});
+
+// On-screen USE
+document.querySelector('[data-act="interact"]').addEventListener('click', interact);
+
+// Ray casting using DDA
+function castRay(rayDirX, rayDirY) {
+  const mapX = Math.floor(player.x);
+  const mapY = Math.floor(player.y);
+
+  let sideDistX, sideDistY;
+
+  const deltaDistX = Math.abs(1 / (rayDirX || 1e-9));
+  const deltaDistY = Math.abs(1 / (rayDirY || 1e-9));
+  let stepX, stepY;
+
+  if (rayDirX < 0) { stepX = -1; sideDistX = (player.x - mapX) * deltaDistX; }
+  else { stepX = 1; sideDistX = (mapX + 1.0 - player.x) * deltaDistX; }
+
+  if (rayDirY < 0) { stepY = -1; sideDistY = (player.y - mapY) * deltaDistY; }
+  else { stepY = 1; sideDistY = (mapY + 1.0 - player.y) * deltaDistY; }
+
+  let hit = false, side = 0, tile = '0';
+  let cx = mapX, cy = mapY;
+
+  for (let i = 0; i < 64; i++) {
+    if (sideDistX < sideDistY) { sideDistX += deltaDistX; cx += stepX; side = 0; }
+    else { sideDistY += deltaDistY; cy += stepY; side = 1; }
+
+    tile = cell(cx, cy);
+    if (tile !== '0') { hit = true; break; }
+  }
+
+  let perpWallDist;
+  if (!hit) perpWallDist = 32; // far
+  else {
+    if (side === 0) perpWallDist = (cx - player.x + (1 - stepX)/2) / (rayDirX || 1e-9);
+    else            perpWallDist = (cy - player.y + (1 - stepY)/2) / (rayDirY || 1e-9);
+  }
+
+  return { dist: perpWallDist, side, tile };
+}
+
+function shadeFor(tile, side) {
+  const s = side===0 ? 0 : 1; // darker on Y sides
+  if (tile === 'E') return [COLORS.exitA, COLORS.exitB, COLORS.exitC, COLORS.exitD][s*2];
+  return [COLORS.wallA, COLORS.wallB, COLORS.wallC, COLORS.wallD][s*2];
+}
+
+// Simple sky/floor fill per column
+function render() {
+  const { w, h, fov } = state;
+  ctx.fillStyle = COLORS.ceil;  ctx.fillRect(0, 0, w, h/2);
+  ctx.fillStyle = COLORS.floor; ctx.fillRect(0, h/2, w, h/2);
+
+  const planeHalf = Math.tan(fov/2);
+
+  for (let x = 0; x < w; x++) {
+    const camX = (2*x / w - 1) * planeHalf;
+    const rayDirX = Math.cos(player.dir) - Math.sin(player.dir) * (-camX);
+    const rayDirY = Math.sin(player.dir) + Math.cos(player.dir) * (-camX);
+
+    const hit = castRay(rayDirX, rayDirY);
+    const dist = Math.max(0.0001, hit.dist);
+    const lineH = Math.min(h, (h / dist));
+
+    const drawStart = (h >> 1) - (lineH >> 1);
+    const color = shadeFor(hit.tile, hit.side);
+    ctx.fillStyle = color;
+    ctx.fillRect(x, drawStart, 1, lineH);
+
+    // Exit shimmer overlay
+    if (hit.tile === 'E') {
+      const t = (performance.now() * 0.004) % 1;
+      const alpha = 0.25 + 0.25 * Math.sin(t*6.28);
+      ctx.fillStyle = `rgba(255, 230, 108, ${alpha.toFixed(3)})`;
+      ctx.fillRect(x, drawStart, 1, lineH);
+    }
+  }
+
+  // Mini-map
+  drawMiniMap();
+}
+
+function drawMiniMap() {
+  const scale = 4;
+  const pad = 6;
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = 'rgba(0,0,0,.5)';
+  ctx.fillRect(pad-2, pad-2, MW*scale+4, MH*scale+4);
+  for (let y=0;y<MH;y++) for (let x=0;x<MW;x++) {
+    const t = cell(x,y);
+    ctx.fillStyle = t==='1' ? '#888' : (t==='E' ? '#ffd84d' : '#222');
+    ctx.fillRect(pad + x*scale, pad + y*scale, scale, scale);
+  }
+  // Player
+  ctx.fillStyle = '#9fef00';
+  ctx.fillRect(pad + player.x*scale -1, pad + player.y*scale -1, 2,2);
+  ctx.globalAlpha = 1;
+}
+
+// Simple movement + collision
+function update(dt) {
+  const sens = parseFloat(document.getElementById('sens').value);
+  const turn = state.turnSpeed * sens;
+
+  let turnDir = 0, fwd = 0, strafe = 0;
+
+  // Keyboard
+  if (state.keys['ArrowLeft'] || state.keys['KeyJ']) turnDir -= 1;
+  if (state.keys['ArrowRight'] || state.keys['KeyL']) turnDir += 1;
+  if (state.keys['ArrowUp'] || state.keys['KeyW']) fwd += 1;
+  if (state.keys['ArrowDown'] || state.keys['KeyS']) fwd -= 1;
+  if (state.keys['KeyA'] || state.keys['KeyQ']) strafe -= 1;
+  if (state.keys['KeyD'] || state.keys['KeyE']) strafe += 1;
+
+  // On-screen
+  if (state.mobileHeld.turnLeft) turnDir -= 1;
+  if (state.mobileHeld.turnRight) turnDir += 1;
+  if (state.mobileHeld.moveForward) fwd += 1;
+  if (state.mobileHeld.moveBackward) fwd -= 1;
+  if (state.mobileHeld.strafeLeft) strafe -= 1;
+  if (state.mobileHeld.strafeRight) strafe += 1;
+
+  player.dir += turnDir * turn * dt;
+
+  const cos = Math.cos(player.dir), sin = Math.sin(player.dir);
+  const ms = state.moveSpeed;
+
+  const dx = (cos * fwd + (-sin) * strafe) * ms * dt;
+  const dy = (sin * fwd + ( cos) * strafe) * ms * dt;
+
+  tryMove(player.x + dx, player.y + dy);
+
+  // Auto-win if we step into the exit tile center
+  if (!state.won) {
+    const cx = Math.floor(player.x), cy = Math.floor(player.y);
+    if (cell(cx, cy) === 'E') {
+      const d = Math.hypot((cx+0.5)-player.x, (cy+0.5)-player.y);
+      if (d < 0.6) win();
+    }
+  }
+}
+
+function loop(ts) {
+  if (!state.last) state.last = ts;
+  const dt = Math.min(0.05, (ts - state.last) / 1000);
+  state.last = ts;
+
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+function win() {
+  state.won = true;
+  flash("Level Complete! Refresh to replay.");
+}
+
+function flash(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(flash._id);
+  flash._id = setTimeout(() => t.style.display = 'none', 2200);
+}
+
+// Helpful hint on load for mobile users
+if (/Mobi|Android/i.test(navigator.userAgent)) {
+  flash("Use the on-screen controls. Drag to look.");
+} else {
+  flash("Click canvas to lock mouse. WASD to move, Space to USE.");
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
