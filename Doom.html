@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Retro Arena — Debug Build</title>
+<title>Retro Arena — Debug Build (zbuf fixed)</title>
 <style>
   html,body{margin:0;height:100%;background:#0a0c12;color:#eee;font-family:system-ui,Arial}
   #wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px}
@@ -34,7 +34,6 @@
   </div>
 </div>
 
-<!-- Pause Menu -->
 <div id="pauseOverlay" class="overlay">
   <div class="panel">
     <h2>Paused</h2>
@@ -50,9 +49,7 @@
 <div id="errbox" class="err"></div>
 
 <script>
-/* ---------------------------------------------------------
-   Hard error catcher: shows problems ON SCREEN (and console)
---------------------------------------------------------- */
+/* Error overlay */
 (function(){
   const errbox = document.getElementById('errbox');
   function show(msg){
@@ -60,93 +57,77 @@
     errbox.textContent = 'ERROR:\n' + msg;
     console.error(msg);
   }
-  window.addEventListener('error', e=>{
-    show((e.message||'Unknown error') + (e.filename?('\n' + e.filename + ':' + e.lineno + ':' + e.colno):'') + (e.error&&e.error.stack?('\n'+e.error.stack):''));
+  addEventListener('error', e=>{
+    show((e.message||'Unknown error') +
+         (e.filename?('\n'+e.filename+':'+e.lineno+':'+e.colno):'') +
+         (e.error&&e.error.stack?('\n'+e.error.stack):''));
   });
-  window.addEventListener('unhandledrejection', e=>{
+  addEventListener('unhandledrejection', e=>{
     show('Unhandled Promise Rejection:\n' + (e.reason&&e.reason.stack?e.reason.stack:JSON.stringify(e.reason)));
   });
 })();
 
-/* ---------------------------------------------------------
-   Safe init wrapper — if anything throws, you’ll see it
---------------------------------------------------------- */
-(function(){
-  try { main(); } catch (e) {
-    const errbox = document.getElementById('errbox');
-    errbox.style.display='block';
-    errbox.textContent = 'INIT CRASH:\n' + (e.stack||e.message||e);
-    console.error(e);
-  }
-})();
+/* Safe init */
+(function(){ try { main(); } catch(e){ const b=document.getElementById('errbox'); b.style.display='block'; b.textContent='INIT CRASH:\n'+(e.stack||e.message||e); console.error(e);} })();
 
-/* ---------------------------------------------------------
-   Game (trimmed + robust): starts only after “Start Game”
---------------------------------------------------------- */
 function main(){
   const canvas = req('#game');
   const ctx = canvas.getContext('2d');
+
+  // declare BEFORE fitCanvas uses it (fix)
+  let zbuf;
+
   let W = canvas.width, H = canvas.height;
 
-  // requestAnimationFrame polyfill (old mobile)
-  window.requestAnimationFrame = window.requestAnimationFrame || function(cb){ return setTimeout(()=>cb(performance.now()),16); };
+  window.requestAnimationFrame = window.requestAnimationFrame || (cb=>setTimeout(()=>cb(performance.now()),16));
 
-  // Resize / DPR
   function fitCanvas(){
-    const dpr = Math.min(2, window.devicePixelRatio||1);
-    const cssW = Math.min(window.innerWidth, 1000);
-    const cssH = Math.floor(cssW * 0.6);
-    canvas.style.width = cssW + 'px';
-    canvas.style.height = cssH + 'px';
-    canvas.width = Math.floor(cssW*dpr);
-    canvas.height= Math.floor(cssH*dpr);
-    W = canvas.width; H = canvas.height;
-    zbuf = new Float32Array(W);
+    const dpr=Math.min(2,window.devicePixelRatio||1);
+    const cssW=Math.min(window.innerWidth,1000);
+    const cssH=Math.floor(cssW*0.6);
+    canvas.style.width=cssW+'px';
+    canvas.style.height=cssH+'px';
+    canvas.width=Math.floor(cssW*dpr);
+    canvas.height=Math.floor(cssH*dpr);
+    W=canvas.width; H=canvas.height;
+    zbuf = new Float32Array(W); // safe now
   }
   fitCanvas();
   addEventListener('resize', fitCanvas);
 
-  // Minimal moving background so you know it’s alive even before Start
-  let t0 = performance.now();
-  function drawIdle(ts){
-    const t = (ts - t0)/1000;
-    const g = ctx.createLinearGradient(0,0,0,H);
-    g.addColorStop(0, hsv(t*20 % 360, 0.4, 0.5));
-    g.addColorStop(1, hsv((t*20+120)%360, 0.6, 0.3));
-    ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 20px system-ui,Arial';
-    ctx.fillText('Idle renderer OK — press Start Game', 16, 16);
-    if (!running) requestAnimationFrame(drawIdle);
-  }
-
-  // Simple HSV→HEX for the idle gradient
+  // idle gradient so you see rendering
+  let t0 = performance.now(), running=false;
   function hsv(h,s,v){
     s=Math.max(0,Math.min(1,s)); v=Math.max(0,Math.min(1,v));
-    h/=60; const i=Math.floor(h); const f=h-i;
+    h/=60; const i=Math.floor(h), f=h-i;
     const p=v*(1-s), q=v*(1-s*f), t=v*(1-s*(1-f));
     let r,g,b;
-    switch(i%6){
-      case 0: r=v; g=t; b=p; break;
-      case 1: r=q; g=v; b=p; break;
-      case 2: r=p; g=v; b=t; break;
-      case 3: r=p; g=q; b=v; break;
-      case 4: r=t; g=p; b=v; break;
-      default:r=v; g=p; b=q; break;
-    }
+    switch(i%6){case 0:r=v;g=t;b=p;break;case 1:r=q;g=v;b=p;break;case 2:r=p;g=v;b=t;break;case 3:r=p;g=q;b=v;break;case 4:r=t;g=p;b=v;break;default:r=v;g=p;b=q;}
     const to255=x=>('0'+(Math.round(x*255)).toString(16)).slice(-2);
     return '#'+to255(r)+to255(g)+to255(b);
   }
+  function drawIdle(ts){
+    if(running) return;
+    const t=(ts-t0)/1000;
+    const g=ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,hsv(t*20%360,0.4,0.5));
+    g.addColorStop(1,hsv((t*20+120)%360,0.6,0.3));
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#fff'; ctx.font='bold 20px system-ui,Arial';
+    ctx.fillText('Idle renderer OK — press Start Game', 16, 16);
+    requestAnimationFrame(drawIdle);
+  }
+  requestAnimationFrame(drawIdle);
 
-  // Minimal arena state (re-using your raycaster core, simplified)
+  // tiny raycaster demo once started
   const MAP_W=28, MAP_H=24;
-  const map = new Array(MAP_W*MAP_H).fill(0);
+  const map=new Array(MAP_W*MAP_H).fill(0);
   const idx=(x,y)=>y*MAP_W+x;
   for(let x=0;x<MAP_W;x++){ map[idx(x,0)]=1; map[idx(x,MAP_H-1)]=1; }
   for(let y=0;y<MAP_H;y++){ map[idx(0,y)]=1; map[idx(MAP_W-1,y)]=1; }
   const WALL_COL={1:'#7bd3ff'};
-  function tile(x,y){ if(x<0||y<0||x>=MAP_W||y>=MAP_H) return 1; return map[(y|0)*MAP_W+(x|0)]; }
+  const tile=(x,y)=>(x<0||y<0||x>=MAP_W||y>=MAP_H)?1:map[(y|0)*MAP_W+(x|0)];
 
-  let zbuf = new Float32Array(W);
   function castRay(ax,ay,ang,max=60){
     const sin=Math.sin(ang), cos=Math.cos(ang);
     let dist=0, hit=false, side=0, hitTile=0;
@@ -157,72 +138,40 @@ function main(){
     let sY=(sin<0)?(ay-mapY)*dY:(mapY+1-ay)*dY;
     while(!hit && dist<max){
       if(sX<sY){ sX+=dX; mapX+=stepX; side=0; } else { sY+=dY; mapY+=stepY; side=1; }
-      hitTile = tile(mapX,mapY);
+      hitTile=tile(mapX,mapY);
       if(hitTile!==0){ hit=true; dist=(side===0)?(sX-dX):(sY-dY); }
     }
     return {dist:dist||max, side, tile:hitTile};
   }
 
-  // Player & input
-  const player = {x:5.5,y:5.5,a:0,fov:85*Math.PI/180,speed:6.0,rot:2.6};
+  const player={x:5.5,y:5.5,a:0,fov:85*Math.PI/180,speed:6,rot:2.6};
   const keys={};
   addEventListener('keydown',e=>{ keys[e.code]=true; if(e.code==='Escape') togglePause(true); });
   addEventListener('keyup',e=>{ keys[e.code]=false; });
 
-  // Pointer lock (only after Start click)
   let pointerLocked=false, pointerEnabled=false;
-  req('#lockBtn').onclick = ()=>{ if(!pointerEnabled) return; if(document.pointerLockElement===canvas){document.exitPointerLock();} else {canvas.requestPointerLock();} };
-  document.addEventListener('pointerlockchange', ()=>{ pointerLocked=(document.pointerLockElement===canvas); });
-  document.addEventListener('mousemove', e=>{
-    if(pointerEnabled && pointerLocked && !showingPause){
-      player.a += (e.movementX||0)*0.0025*1.5;
-    }
-  });
+  req('#lockBtn').onclick=()=>{ if(!pointerEnabled) return; if(document.pointerLockElement===canvas){document.exitPointerLock();} else {canvas.requestPointerLock();} };
+  addEventListener('pointerlockchange',()=>{ pointerLocked=(document.pointerLockElement===canvas); });
+  addEventListener('mousemove',e=>{ if(pointerEnabled && pointerLocked && !showingPause){ player.a += (e.movementX||0)*0.0025*1.5; }});
 
-  // Pause menu
-  const pauseOverlay = req('#pauseOverlay');
-  let showingPause=false;
-  req('#pauseBtn').onclick = ()=>togglePause(true);
-  req('#resumeBtn').onclick= ()=>togglePause(false);
-  req('#restartBtn').onclick= ()=>{ round=1; spawnRound(); togglePause(false); };
-  req('#quitBtn').onclick   = ()=>{ location.reload(); };
-  function togglePause(show){ showingPause = show ?? !showingPause; pauseOverlay.style.display = showingPause?'flex':'none'; if(showingPause && document.pointerLockElement===canvas) document.exitPointerLock(); }
+  const pauseOverlay=req('#pauseOverlay'); let showingPause=false;
+  req('#pauseBtn').onclick=()=>togglePause(true);
+  req('#resumeBtn').onclick=()=>togglePause(false);
+  req('#restartBtn').onclick=()=>{ round=1; spawnRound(); togglePause(false); };
+  req('#quitBtn').onclick=()=>{ location.reload(); };
+  function togglePause(show){ showingPause=show ?? !showingPause; pauseOverlay.style.display=showingPause?'flex':'none'; if(showingPause && document.pointerLockElement===canvas) document.exitPointerLock(); }
 
-  // Enemies (super simple)
   let enemies=[], round=1;
-  function randSpawn(){
-    for(let t=0;t<200;t++){
-      const x=2+Math.random()*(MAP_W-4), y=2+Math.random()*(MAP_H-4);
-      if(tile(x,y)===0 && Math.hypot(x-player.x,y-player.y)>6) return {x,y};
-    }
-    return {x:MAP_W-3,y:MAP_H-3};
-  }
-  function spawnRound(){
-    enemies.length=0;
-    const n = Math.min(6 + round*2, 40);
-    for(let i=0;i<n;i++){ const p=randSpawn(); enemies.push({x:p.x,y:p.y,alive:true}); }
-  }
+  function randSpawn(){ for(let t=0;t<200;t++){ const x=2+Math.random()*(MAP_W-4), y=2+Math.random()*(MAP_H-4); if(tile(x,y)===0 && Math.hypot(x-player.x,y-player.y)>6) return {x,y}; } return {x:MAP_W-3,y:MAP_H-3}; }
+  function spawnRound(){ enemies.length=0; const n=Math.min(6+round*2,40); for(let i=0;i<n;i++){ const p=randSpawn(); enemies.push({x:p.x,y:p.y,alive:true}); } }
 
-  // Start button — AFTER click we enable pointer/maybe audio etc.
-  let running=false;
-  req('#startBtn').onclick = ()=>{
-    running=true;
-    pointerEnabled=true;     // ok to ask for pointer lock now
-    spawnRound();
-  };
+  req('#startBtn').onclick=()=>{ running=true; pointerEnabled=true; spawnRound(); };
+  req('#fsBtn').onclick=()=>{ if(!document.fullscreenElement){ (document.body.requestFullscreen||document.documentElement.requestFullscreen||canvas.requestFullscreen).call(document.body);} else { document.exitFullscreen&&document.exitFullscreen(); }};
 
-  // Fullscreen button
-  req('#fsBtn').onclick = ()=>{ if(!document.fullscreenElement){ (document.body.requestFullscreen||document.documentElement.requestFullscreen||canvas.requestFullscreen).call(document.body); } else { document.exitFullscreen&&document.exitFullscreen(); }};
-
-  // Idle renderer (until Start)
-  requestAnimationFrame(drawIdle);
-
-  // Game loop
   let last=performance.now();
   function loop(ts){
     const dt=Math.min(0.033,(ts-last)/1000); last=ts;
     if(running && !showingPause){
-      // Input
       const forward=(keys['KeyW']?1:0)-(keys['KeyS']?1:0);
       const strafe =(keys['KeyD']?1:0)-(keys['KeyA']?1:0);
       const turn   =(keys['ArrowRight']?1:0)-(keys['ArrowLeft']?1:0);
@@ -230,7 +179,6 @@ function main(){
       const dirx=Math.cos(player.a), diry=Math.sin(player.a);
       const strx=Math.cos(player.a+Math.PI/2), stry=Math.sin(player.a+Math.PI/2);
       const sp=player.speed*dt;
-      // collision-lite
       player.x+=dirx*(forward*sp)+strx*(strafe*sp);
       player.y+=diry*(forward*sp)+stry*(strafe*sp);
       if(tile(player.x,player.y)!==0){ player.x=Math.min(Math.max(player.x,1.1),MAP_W-1.1); player.y=Math.min(Math.max(player.y,1.1),MAP_H-1.1); }
@@ -241,37 +189,28 @@ function main(){
   requestAnimationFrame(loop);
 
   function render(){
-    // sky/floor
-    const sky=ctx.createLinearGradient(0,0,0,H/2);
-    sky.addColorStop(0,'#6d83ff'); sky.addColorStop(1,'#2b2f73'); ctx.fillStyle=sky; ctx.fillRect(0,0,W,H/2);
-    const floor=ctx.createLinearGradient(0,H/2,0,H);
-    floor.addColorStop(0,'#2c3555'); floor.addColorStop(1,'#0b0f1f'); ctx.fillStyle=floor; ctx.fillRect(0,H/2,W,H/2);
-
-    // walls
+    const sky=ctx.createLinearGradient(0,0,0,H/2); sky.addColorStop(0,'#6d83ff'); sky.addColorStop(1,'#2b2f73'); ctx.fillStyle=sky; ctx.fillRect(0,0,W,H/2);
+    const floor=ctx.createLinearGradient(0,H/2,0,H); floor.addColorStop(0,'#2c3555'); floor.addColorStop(1,'#0b0f1f'); ctx.fillStyle=floor; ctx.fillRect(0,H/2,W,H/2);
     if(zbuf.length!==W) zbuf=new Float32Array(W);
     for(let x=0;x<W;x++){
       const cameraX=(2*x/W-1);
-      const rayAng = player.a + cameraX * (player.fov/2) * 2;
-      const hit = castRay(player.x,player.y,rayAng,60);
-      const dist = hit.dist*Math.cos(rayAng-player.a);
+      const rayAng=player.a + cameraX*(player.fov/2)*2;
+      const hit=castRay(player.x,player.y,rayAng,60);
+      const dist=hit.dist*Math.cos(rayAng-player.a);
       zbuf[x]=dist;
       const lineH=Math.min(H, H/(dist+0.0001));
       const y0=(H-lineH)/2;
       let col=WALL_COL[hit.tile]||'#888'; if(hit.side) col=darken(col,0.75);
       ctx.fillStyle=col; ctx.fillRect(x,y0,1,lineH);
     }
-
-    // simple crosshair
     ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.beginPath();
     ctx.moveTo(W/2-8,H/2); ctx.lineTo(W/2+8,H/2);
-    ctx.moveTo(W/2,H/2-8); ctx.lineTo(W/2,H/2+8);
-    ctx.stroke();
+    ctx.moveTo(W/2,H/2-8); ctx.lineTo(W/2,H/2+8); ctx.stroke();
   }
-
   function darken(hex,f){ const c=parseInt(hex.slice(1),16); let r=((c>>16)&255)*f|0,g=((c>>8)&255)*f|0,b=(c&255)*f|0; return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1); }
 }
 
-/* ---------- tiny DOM helpers ---------- */
+/* tiny DOM helper */
 function req(sel){ const el=document.querySelector(sel); if(!el){ throw new Error('Missing element '+sel); } return el; }
 </script>
 </body>
